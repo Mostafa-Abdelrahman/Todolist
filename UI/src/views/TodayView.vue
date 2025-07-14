@@ -1,19 +1,12 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import apiService from '@/services/api.js'
 
-// Example lists (could be imported or shared via store)
-const lists = ref([
-  { name: 'Work Projects', id: 1 },
-  { name: 'Personal Goals', id: 2 },
-  { name: 'Shopping List', id: 3 }
-])
-
-// Example tasks (could be imported or shared via store)
-const tasks = ref([
-  { title: 'Finish report', listId: 1, due: new Date().toISOString().slice(0, 10), done: false },
-  { title: 'Buy groceries', listId: 3, due: new Date().toISOString().slice(0, 10), done: false },
-  { title: 'Go for a run', listId: 2, due: '2024-06-10', done: false }
-])
+// Reactive data
+const lists = ref([])
+const tasks = ref([])
+const loading = ref(false)
+const error = ref(null)
 
 const today = new Date().toISOString().slice(0, 10)
 const todayDisplay = new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
@@ -23,17 +16,55 @@ const todayTasks = computed(() => tasks.value.filter(t => t.due === today))
 
 // Add new task for today
 const newTaskTitle = ref('')
-const newTaskList = ref(lists.value[0]?.id || null)
-function addTask() {
+const newTaskList = ref(null)
+
+// Fetch data from API
+async function fetchData() {
+  loading.value = true
+  error.value = null
+  
+  try {
+    const [listsData, tasksData] = await Promise.all([
+      apiService.getLists(),
+      apiService.getTodos()
+    ])
+    
+    lists.value = listsData
+    tasks.value = tasksData
+    
+    // Set default list for new task form
+    if (lists.value.length > 0 && !newTaskList.value) {
+      newTaskList.value = lists.value[0].id
+    }
+  } catch (err) {
+    error.value = err.message
+    console.error('Failed to fetch data:', err)
+  } finally {
+    loading.value = false
+  }
+}
+
+async function addTask() {
   if (!newTaskTitle.value || !newTaskList.value) return
-  tasks.value.push({
-    title: newTaskTitle.value,
-    listId: newTaskList.value,
-    due: today,
-    done: false
-  })
-  newTaskTitle.value = ''
-  newTaskList.value = lists.value[0]?.id || null
+  
+  try {
+    const newTask = {
+      title: newTaskTitle.value,
+      listId: newTaskList.value,
+      due: today,
+      done: false
+    }
+    
+    const createdTask = await apiService.createTodo(newTask)
+    tasks.value.push(createdTask)
+    
+    // Reset form
+    newTaskTitle.value = ''
+    newTaskList.value = lists.value[0]?.id || null
+  } catch (err) {
+    error.value = err.message
+    console.error('Failed to create task:', err)
+  }
 }
 
 // Edit logic
@@ -43,27 +74,60 @@ function startEdit(idx, task) {
   editingIndex.value = idx
   editingTitle.value = task.title
 }
-function saveEdit(idx) {
+
+async function saveEdit(idx) {
   if (editingTitle.value.trim()) {
-    // Find the task in the main tasks array and update
     const task = todayTasks.value[idx]
-    const mainIdx = tasks.value.findIndex(t => t === task)
-    if (mainIdx !== -1) tasks.value[mainIdx].title = editingTitle.value
+    try {
+      const updatedTask = await apiService.updateTodo(task.id, {
+        ...task,
+        title: editingTitle.value
+      })
+      
+      // Update in local state
+      const taskIndex = tasks.value.findIndex(t => t.id === task.id)
+      if (taskIndex !== -1) {
+        tasks.value[taskIndex] = updatedTask
+      }
+    } catch (err) {
+      error.value = err.message
+      console.error('Failed to update task:', err)
+      return
+    }
   }
   editingIndex.value = null
   editingTitle.value = ''
 }
+
 function cancelEdit() {
   editingIndex.value = null
   editingTitle.value = ''
 }
 
-// Toggle done (fix: update in main tasks array)
-function toggleDone(idx) {
+// Toggle done
+async function toggleDone(idx) {
   const task = todayTasks.value[idx]
-  const mainIdx = tasks.value.findIndex(t => t === task)
-  if (mainIdx !== -1) tasks.value[mainIdx].done = !tasks.value[mainIdx].done
+  try {
+    const updatedTask = await apiService.updateTodo(task.id, {
+      ...task,
+      done: !task.done
+    })
+    
+    // Update in local state
+    const taskIndex = tasks.value.findIndex(t => t.id === task.id)
+    if (taskIndex !== -1) {
+      tasks.value[taskIndex] = updatedTask
+    }
+  } catch (err) {
+    error.value = err.message
+    console.error('Failed to update task:', err)
+  }
 }
+
+// Load data on component mount
+onMounted(() => {
+  fetchData()
+})
 </script>
 
 <template>
@@ -75,8 +139,19 @@ function toggleDone(idx) {
       </div>
     </div>
 
+    <!-- Error Message -->
+    <div v-if="error" class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-6">
+      {{ error }}
+    </div>
+
+    <!-- Loading State -->
+    <div v-if="loading" class="text-center py-8">
+      <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+      <p class="mt-2 text-gray-600">Loading...</p>
+    </div>
+
     <!-- Add Task for Today -->
-    <div class="bg-white rounded-xl shadow-sm mb-8 w-full px-4 py-5 md:px-8 flex flex-col md:flex-row md:items-end gap-4">
+    <div v-if="!loading" class="bg-white rounded-xl shadow-sm mb-8 w-full px-4 py-5 md:px-8 flex flex-col md:flex-row md:items-end gap-4">
       <form @submit.prevent="addTask" class="flex flex-col md:flex-row w-full gap-3 md:gap-4">
         <input
           v-model="newTaskTitle"
@@ -100,10 +175,10 @@ function toggleDone(idx) {
     </div>
 
     <!-- Today's Tasks List -->
-    <div class="bg-white rounded-xl shadow-sm p-6 w-full">
+    <div v-if="!loading" class="bg-white rounded-xl shadow-sm p-6 w-full">
       <h2 class="text-lg font-semibold text-gray-700 mb-4">Tasks List</h2>
       <ul class="space-y-3">
-        <li v-for="(task, idx) in todayTasks" :key="task.title + task.listId" class="flex items-center gap-3">
+        <li v-for="(task, idx) in todayTasks" :key="task.id" class="flex items-center gap-3">
           <input type="checkbox" :checked="task.done" @change="toggleDone(idx)" class="h-5 w-5 text-blue-600 rounded border-gray-300 focus:ring-blue-500" />
           <span class="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded" v-if="lists.find(l => l.id === task.listId)">
             {{ lists.find(l => l.id === task.listId).name }}

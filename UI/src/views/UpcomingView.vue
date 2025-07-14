@@ -1,20 +1,12 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import apiService from '@/services/api.js'
 
-const lists = ref([
-  { name: 'Work Projects', id: 1 },
-  { name: 'Personal Goals', id: 2 },
-  { name: 'Shopping List', id: 3 }
-])
-
-const tasks = ref([
-  { title: 'Finish quarterly report', listId: 1, due: '2026-06-15', done: false },
-  { title: 'Team meeting', listId: 1, due: '2026-06-15', done: false },
-  { title: 'Buy birthday gift', listId: 3, due: '2026-06-18', done: false },
-  { title: 'Gym session', listId: 2, due: '2026-06-20', done: false },
-  { title: 'Project presentation', listId: 1, due: '2026-06-25', done: false },
-  { title: 'Read new book', listId: 2, due: '2026-06-30', done: false }
-])
+// Reactive data
+const lists = ref([])
+const tasks = ref([])
+const loading = ref(false)
+const error = ref(null)
 
 const today = new Date().toISOString().slice(0, 10)
 
@@ -50,23 +42,54 @@ function formatDate(dateString) {
   })
 }
 
+// Fetch data from API
+async function fetchData() {
+  loading.value = true
+  error.value = null
+  
+  try {
+    const [listsData, tasksData] = await Promise.all([
+      apiService.getLists(),
+      apiService.getTodos()
+    ])
+    
+    lists.value = listsData
+    tasks.value = tasksData
+  } catch (err) {
+    error.value = err.message
+    console.error('Failed to fetch data:', err)
+  } finally {
+    loading.value = false
+  }
+}
+
 const newTaskTitle = ref('')
-const newTaskList = ref(lists.value[0]?.id || null)
+const newTaskList = ref(null)
 const newTaskDue = ref('')
 
-function addTask() {
+async function addTask() {
   if (!newTaskTitle.value || !newTaskList.value || !newTaskDue.value) return
   if (newTaskDue.value < today) return 
   
-  tasks.value.push({
-    title: newTaskTitle.value,
-    listId: newTaskList.value,
-    due: newTaskDue.value,
-    done: false
-  })
-  newTaskTitle.value = ''
-  newTaskList.value = lists.value[0]?.id || null
-  newTaskDue.value = ''
+  try {
+    const newTask = {
+      title: newTaskTitle.value,
+      listId: newTaskList.value,
+      due: newTaskDue.value,
+      done: false
+    }
+    
+    const createdTask = await apiService.createTodo(newTask)
+    tasks.value.push(createdTask)
+    
+    // Reset form
+    newTaskTitle.value = ''
+    newTaskDue.value = ''
+    newTaskList.value = lists.value[0]?.id || null
+  } catch (err) {
+    error.value = err.message
+    console.error('Failed to create task:', err)
+  }
 }
 
 const editingTask = ref(null)
@@ -77,9 +100,24 @@ function startEdit(task) {
   editingTitle.value = task.title
 }
 
-function saveEdit() {
+async function saveEdit() {
   if (editingTitle.value.trim() && editingTask.value) {
-    editingTask.value.title = editingTitle.value
+    try {
+      const updatedTask = await apiService.updateTodo(editingTask.value.id, {
+        ...editingTask.value,
+        title: editingTitle.value
+      })
+      
+      // Update in local state
+      const taskIndex = tasks.value.findIndex(t => t.id === editingTask.value.id)
+      if (taskIndex !== -1) {
+        tasks.value[taskIndex] = updatedTask
+      }
+    } catch (err) {
+      error.value = err.message
+      console.error('Failed to update task:', err)
+      return
+    }
   }
   editingTask.value = null
   editingTitle.value = ''
@@ -91,9 +129,28 @@ function cancelEdit() {
 }
 
 // Toggle done
-function toggleDone(task) {
-  task.done = !task.done
+async function toggleDone(task) {
+  try {
+    const updatedTask = await apiService.updateTodo(task.id, {
+      ...task,
+      done: !task.done
+    })
+    
+    // Update in local state
+    const taskIndex = tasks.value.findIndex(t => t.id === task.id)
+    if (taskIndex !== -1) {
+      tasks.value[taskIndex] = updatedTask
+    }
+  } catch (err) {
+    error.value = err.message
+    console.error('Failed to update task:', err)
+  }
 }
+
+// Load data on component mount
+onMounted(() => {
+  fetchData()
+})
 </script>
 
 <template>
@@ -105,8 +162,19 @@ function toggleDone(task) {
       </div>
     </div>
 
+    <!-- Error Message -->
+    <div v-if="error" class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-6">
+      {{ error }}
+    </div>
+
+    <!-- Loading State -->
+    <div v-if="loading" class="text-center py-8">
+      <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+      <p class="mt-2 text-gray-600">Loading...</p>
+    </div>
+
     <!-- Add Task for Upcoming -->
-    <div class="bg-white rounded-xl shadow-sm mb-8 w-full px-4 py-5 md:px-8 flex flex-col md:flex-row md:items-end gap-4">
+    <div v-if="!loading" class="bg-white rounded-xl shadow-sm mb-8 w-full px-4 py-5 md:px-8 flex flex-col md:flex-row md:items-end gap-4">
       <form @submit.prevent="addTask" class="flex flex-col md:flex-row w-full gap-3 md:gap-4">
         <input
           v-model="newTaskTitle"
@@ -137,7 +205,7 @@ function toggleDone(task) {
     </div>
 
     <!-- Upcoming Tasks by Date -->
-    <div v-if="Object.keys(groupedTasks).length > 0" class="space-y-6">
+    <div v-if="!loading && Object.keys(groupedTasks).length > 0" class="space-y-6">
       <div 
         v-for="(tasksForDate, date) in groupedTasks" 
         :key="date"
@@ -154,7 +222,7 @@ function toggleDone(task) {
           <ul class="space-y-3">
             <li 
               v-for="task in tasksForDate" 
-              :key="task.title + task.listId"
+              :key="task.id"
               class="flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
             >
               <input 
@@ -193,7 +261,7 @@ function toggleDone(task) {
     </div>
 
     <!-- Empty State -->
-    <div v-else class="bg-white rounded-xl shadow-sm p-8 text-center">
+    <div v-if="!loading && Object.keys(groupedTasks).length === 0" class="bg-white rounded-xl shadow-sm p-8 text-center">
       <div class="text-gray-400 mb-4">
         <svg class="w-16 h-16 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
