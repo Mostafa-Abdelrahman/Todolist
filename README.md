@@ -24,11 +24,11 @@ A modern todo list application built with Vue.js frontend and Go backend.
 ### Dashboard View
 ![Dashboard](screens/Screenshot%202025-07-14%20142824.png)
 
-### Create/Edit List
-![Create/Edit List](screens/Screenshot%202025-07-14%20142837.png)
-
 ### Today's Tasks & Upcoming Tasks
-![Today/Upcoming](screens/Screenshot%202025-07-14%20142910.png)
+![Today/Upcoming](screens/Screenshot%202025-07-14%20142837.png)
+
+### List tasks
+![List/Tasks](screens/Screenshot%202025-07-14%20142910.png)
 
 ## Project Structure
 
